@@ -1,0 +1,235 @@
+#!/bin/sh
+
+# IOS Projekt 1
+# Matej Matuska
+# xmatus36
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=C
+
+usage() {
+    echo "Usage: tradelog [FILTER]... [COMMAND] [LOG]...
+       tragelog [-h|--help]
+
+Options:
+  -h --help       Display this information and exit successfully
+  -a <datetime>   Print tickers older than given date and time
+  -b <datetime>   Print tickers not older than given date and time
+  -t <ticker>     Filter by given ticker,
+                  if specified more than once, filer by all specified tickers
+  -w <width>      Set the width of graphs, meaining the lenght of longest line
+
+Commands:
+  list-tick       List tickers
+  profit          Print total profit
+  pos             Print values of currently held positions sorted by values
+  last-price      Print last known price for every ticker
+  hist-ord        Print histogram of number of transactions by ticker
+  graph-pos       Print graph of values of held positions by ticker"
+}
+
+AFTER="0000-00-00 00:00:00"
+BEFORE="9999-99-99 99:99:99"
+
+# argument parsing
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+
+        -a) AFTER=$2
+            shift 2
+            ;;
+        -b) BEFORE=$2
+            shift 2
+            ;;
+        -t) if [ -z "$TICKERS" ]; then
+                TICKERS=$2
+            else
+                TICKERS="$TICKERS|$2"
+            fi
+            shift 2
+            ;;
+
+        list-tick|profit|pos|last-price|hist-ord|graph-pos)
+            if [ -z "$COMMAND" ]; then
+                COMMAND=$1
+            else
+                echo "Error: multiple commands entered"
+                exit 1
+            fi
+            shift
+            ;;
+        -w) if [ -z "$WIDTH" ]; then
+                if [ "$2" -lt 1 ]; then
+                    echo "Error: -w : positive integer expected"
+                    exit 1
+                fi
+                WIDTH=$2
+            else
+                echo "Error: Option -w specified repeatedly"
+                exit 1
+            fi
+            shift 2
+            ;;
+
+        *) if [ -f "$1" ]; then
+                LOGS="$LOGS $1"
+            else
+                echo "No such file: $1"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# reads the input files and prints them to stdin
+reader() {
+    for log in $LOGS; do
+        case "$log" in
+            *.gz) zcat "$log";;
+            *) cat "$log";;
+        esac
+    done
+
+    if [ -z "$LOGS" ]; then
+        cat # no files, just read stdin
+    fi
+}
+
+INPUT=$(reader)
+
+# filters the input
+filter() {
+    if [ -n "$TICKERS" ]; then
+        echo "$INPUT" | grep -w -E "$TICKERS" | awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
+    else
+        echo "$INPUT" | awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
+    fi
+}
+
+FILTERED=$(filter)
+
+# execute command on filtered input
+echo "$FILTERED" | case "$COMMAND" in
+    list-tick)
+        awk -F ';' '{ print $2 }' | sort | uniq
+        ;;
+    profit)
+        awk -F ';' '
+            $3=="sell"{ profit += $4*$6 }
+            $3=="buy"{ profit -= $4*$6 }
+            END{ printf "%.2f\n",  profit }'
+        ;;
+    pos)
+        awk -F ';' '
+            $3=="sell"{ vol[$2] -= $6 }
+            $3=="buy"{ vol[$2] += $6 }
+            { price[$2] = $4 }
+            END{
+                for (tick in vol) {
+                    # compute value
+                    val[tick] = vol[tick] * price[tick]
+
+                    # find the max lenght of value, used to align values column
+                    str = sprintf("%.2f", val[tick]) # necessary to count the lenght correctly
+                    len = length(str)
+                    w = len > w ? len : w
+                }
+
+                for (tick in val) {
+                    printf "%-10s: %*.2f\n", tick, w, val[tick]
+                }
+            }' | sort -t ':' -k 2 -g -r
+        ;;
+    last-price)
+        awk -F ';' '
+            { price[$2] = $4 }
+            END{
+                for (tick in price) {
+                    # find the max lenght of price, used to align prices column
+                    len = length(price[tick])
+                    w = len > w ? len : w
+                }
+
+                for (tick in price)
+                    printf "%-10s: %*.2f\n", tick, w, price[tick]
+            }' | sort
+        ;;
+    hist-ord)
+        if [ -z "$WIDTH" ]; then
+            WIDTH=1 # used as default when no width is specified
+        fi
+
+        awk -F ';' -v width="$WIDTH" '
+            { count[$2]++ }
+            END{
+                for (tick in count) {
+                    if (count[tick] > max)
+                        max = count[tick]
+                }
+                if (width == 1)
+                    ratio = 1
+                else
+                    ratio = max / width
+
+                for(tick in count) {
+                    printf "%-10s: ", tick;
+                    w = count[tick] / ratio
+                    for(i = 0; i < w; i++) {
+                        printf "#"
+                    }
+
+                    printf "\n"
+                } 
+            }
+            ' | sort
+        ;;
+    graph-pos)
+        if [ -z "$WIDTH" ]; then
+            WIDTH=0 # used as default when no width is specified
+        fi
+        awk -F ';' -v width="$WIDTH" '
+            $3 == "sell"{ vol[$2] -= $6 }
+            $3 == "buy"{ vol[$2] += $6 }
+            { price[$2] = $4 }
+            END {
+                for (tick in vol) {
+                    val[tick] = vol[tick] * price[tick]
+                    v = val[tick] < 0 ? -val[tick] : val[tick]
+                    if (v > max)
+                        max = v
+                }
+
+                if (width == 0) {
+                    ratio = 1000
+                } else {
+                    ratio = max / width
+                }
+
+
+                for (tick in vol) {
+                    printf "%-10s:", tick
+
+                    w = val[tick] / ratio
+                    w = w < 0 ? -w : w
+                    if (int(w) != 0) {
+                        printf " "
+                    }
+                    for (i = 0; i < int(w); i++)
+                        if (val[tick] > 0)
+                            printf "#"
+                        else
+                            printf "!"
+
+                    printf "\n"
+                }
+            }'| sort
+        ;;
+    *)
+        cat # when we have no command just print
+        ;;
+esac
