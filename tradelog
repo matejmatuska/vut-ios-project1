@@ -3,6 +3,7 @@
 # IOS Projekt 1
 # Matej Matuska
 # xmatus36
+# 03.04.2021
 
 export POSIXLY_CORRECT=yes
 export LC_NUMERIC=C
@@ -39,13 +40,26 @@ while [ $# -gt 0 ]; do
             exit 0
             ;;
 
-        -a) AFTER=$2
+        -a) if [ -z "$2"]; then
+                echo "Error: expected one argument for -a"
+                exit 1
+            fi
+            AFTER=$2
             shift 2
             ;;
-        -b) BEFORE=$2
+        -b) if [ -z "$2"]; then
+                echo "Error: expected one argument for -b"
+                exit 1
+            fi
+            BEFORE=$2
             shift 2
             ;;
-        -t) if [ -z "$TICKERS" ]; then
+        -t) if [ -z "$2" ]; then 
+                echo "Error: expected one argument for -t"
+                exit 1
+            fi
+
+            if [ -z "$TICKERS" ]; then
                 TICKERS=$2
             else
                 TICKERS="$TICKERS|$2"
@@ -62,7 +76,12 @@ while [ $# -gt 0 ]; do
             fi
             shift
             ;;
-        -w) if [ -z "$WIDTH" ]; then
+        -w) if [ -z "$2" ]; then
+                echo "Error: expected one argument for -w"
+                exit 1
+            fi
+
+            if [ -z "$WIDTH" ]; then
                 if [ "$2" -lt 1 ]; then
                     echo "Error: -w : positive integer expected"
                     exit 1
@@ -75,7 +94,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
 
-        *) if [ -f "$1" ]; then
+        *) if [ -r "$1" ]; then
                 LOGS="$LOGS $1"
             else
                 echo "No such file: $1"
@@ -89,9 +108,9 @@ done
 # reads the input files and prints them to stdin
 reader() {
     for log in $LOGS; do
-        case "$log" in
-            *.gz) zcat "$log";;
-            *) cat "$log";;
+        case $log in
+            *.gz) zcat $log;;
+            *) cat $log;;
         esac
     done
 
@@ -105,9 +124,12 @@ INPUT=$(reader)
 # filters the input
 filter() {
     if [ -n "$TICKERS" ]; then
-        echo "$INPUT" | grep -w -E "$TICKERS" | awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
+        echo "$INPUT" | 
+            grep -w -E "$TICKERS" | 
+            awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
     else
-        echo "$INPUT" | awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
+        echo "$INPUT" | 
+            awk -F ';' -v a="$AFTER" -v b="$BEFORE" '{ if($1>a && $1<b) { print $0 } }'
     fi
 }
 
@@ -155,6 +177,9 @@ echo "$FILTERED" | case "$COMMAND" in
                     w = len > w ? len : w
                 }
 
+                if (w == 0)
+                    exit 0
+
                 for (tick in price)
                     printf "%-10s: %*.2f\n", tick, w, price[tick]
             }' | sort
@@ -171,12 +196,17 @@ echo "$FILTERED" | case "$COMMAND" in
                     if (count[tick] > max)
                         max = count[tick]
                 }
+
                 if (width == 1)
                     ratio = 1
                 else
                     ratio = max / width
 
                 for(tick in count) {
+
+                    if (tick == "")
+                        exit 0
+
                     printf "%-10s: ", tick;
                     w = count[tick] / ratio
                     for(i = 0; i < w; i++) {
@@ -227,7 +257,7 @@ echo "$FILTERED" | case "$COMMAND" in
 
                     printf "\n"
                 }
-            }'| sort
+            }' | sort
         ;;
     *)
         cat # when we have no command just print
